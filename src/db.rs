@@ -23,7 +23,7 @@ use crate::{
     ColumnFamily, ColumnFamilyDescriptor, CompactOptions, DBIteratorWithThreadMode,
     DBPinnableSlice, DBRawIteratorWithThreadMode, DBWALIterator, Direction, Error, FlushOptions,
     IngestExternalFileOptions, IteratorMode, Options, ReadOptions, SnapshotWithThreadMode,
-    WriteBatch, WriteOptions, DEFAULT_COLUMN_FAMILY_NAME,
+    WaitForCompactOptions, WriteBatch, WriteOptions, DEFAULT_COLUMN_FAMILY_NAME,
 };
 
 use crate::ffi_util::CSlice;
@@ -408,6 +408,8 @@ impl<T: ThreadMode> DBWithThreadMode<T> {
 
     /// Opens a database with the given database with a Time to Live compaction filter and
     /// column family descriptors.
+    /// *NOTE*: `default` column family is opened with `Options::default()`.
+    /// If you want to open `default` cf with different options, set them explicitly in `cfs`.
     pub fn open_cf_descriptors_with_ttl<P, I>(
         opts: &Options,
         path: P,
@@ -454,6 +456,8 @@ impl<T: ThreadMode> DBWithThreadMode<T> {
     }
 
     /// Opens a database for read only with the given database options and column family names.
+    /// *NOTE*: `default` column family is opened with `Options::default()`.
+    /// If you want to open `default` cf with different options, set them explicitly in `cfs`.
     pub fn open_cf_for_read_only<P, I, N>(
         opts: &Options,
         path: P,
@@ -480,6 +484,8 @@ impl<T: ThreadMode> DBWithThreadMode<T> {
     }
 
     /// Opens a database for read only with the given database options and column family names.
+    /// *NOTE*: `default` column family is opened with `Options::default()`.
+    /// If you want to open `default` cf with different options, set them explicitly in `cfs`.
     pub fn open_cf_with_opts_for_read_only<P, I, N>(
         db_opts: &Options,
         path: P,
@@ -507,6 +513,8 @@ impl<T: ThreadMode> DBWithThreadMode<T> {
 
     /// Opens a database for ready only with the given database options and
     /// column family descriptors.
+    /// *NOTE*: `default` column family is opened with `Options::default()`.
+    /// If you want to open `default` cf with different options, set them explicitly in `cfs`.
     pub fn open_cf_descriptors_read_only<P, I>(
         opts: &Options,
         path: P,
@@ -528,6 +536,8 @@ impl<T: ThreadMode> DBWithThreadMode<T> {
     }
 
     /// Opens the database as a secondary with the given database options and column family names.
+    /// *NOTE*: `default` column family is opened with `Options::default()`.
+    /// If you want to open `default` cf with different options, set them explicitly in `cfs`.
     pub fn open_cf_as_secondary<P, I, N>(
         opts: &Options,
         primary_path: P,
@@ -555,6 +565,8 @@ impl<T: ThreadMode> DBWithThreadMode<T> {
 
     /// Opens the database as a secondary with the given database options and
     /// column family descriptors.
+    /// *NOTE*: `default` column family is opened with `Options::default()`.
+    /// If you want to open `default` cf with different options, set them explicitly in `cfs`.
     pub fn open_cf_descriptors_as_secondary<P, I>(
         opts: &Options,
         path: P,
@@ -576,6 +588,8 @@ impl<T: ThreadMode> DBWithThreadMode<T> {
     }
 
     /// Opens a database with the given database options and column family descriptors.
+    /// *NOTE*: `default` column family is opened with `Options::default()`.
+    /// If you want to open `default` cf with different options, set them explicitly in `cfs`.
     pub fn open_cf_descriptors<P, I>(opts: &Options, path: P, cfs: I) -> Result<Self, Error>
     where
         P: AsRef<Path>,
@@ -636,7 +650,7 @@ impl<T: ThreadMode> DBWithThreadMode<T> {
 
             let cfopts: Vec<_> = cfs_v
                 .iter()
-                .map(|cf| cf.options.inner as *const _)
+                .map(|cf| cf.options.inner.cast_const())
                 .collect();
 
             db = Self::open_cf_raw(
@@ -1147,7 +1161,7 @@ impl<T: ThreadMode, D: DBInner> DBCommon<T, D> {
             .collect();
         let ptr_cfs: Vec<_> = cfs_and_keys
             .iter()
-            .map(|(c, _)| c.inner() as *const _)
+            .map(|(c, _)| c.inner().cast_const())
             .collect();
 
         let mut values = vec![ptr::null_mut(); ptr_keys.len()];
@@ -1225,7 +1239,7 @@ impl<T: ThreadMode, D: DBInner> DBCommon<T, D> {
             );
             pinned_values
                 .into_iter()
-                .zip(errors.into_iter())
+                .zip(errors)
                 .map(|(v, e)| {
                     if e.is_null() {
                         if v.is_null() {
@@ -1746,6 +1760,24 @@ impl<T: ThreadMode, D: DBInner> DBCommon<T, D> {
         }
     }
 
+    /// Wait for all flush and compactions jobs to finish. Jobs to wait include the
+    /// unscheduled (queued, but not scheduled yet).
+    ///
+    /// NOTE: This may also never return if there's sufficient ongoing writes that
+    /// keeps flush and compaction going without stopping. The user would have to
+    /// cease all the writes to DB to make this eventually return in a stable
+    /// state. The user may also use timeout option in WaitForCompactOptions to
+    /// make this stop waiting and return when timeout expires.
+    pub fn wait_for_compact(&self, opts: &WaitForCompactOptions) -> Result<(), Error> {
+        unsafe {
+            ffi_try!(ffi::rocksdb_wait_for_compact(
+                self.inner.inner(),
+                opts.inner
+            ));
+        }
+        Ok(())
+    }
+
     pub fn set_options(&self, opts: &[(&str, &str)]) -> Result<(), Error> {
         let copts = convert_options(opts)?;
         let cnames: Vec<*const c_char> = copts.iter().map(|opt| opt.0.as_ptr()).collect();
@@ -1982,7 +2014,7 @@ impl<T: ThreadMode, D: DBInner> DBCommon<T, D> {
                 self.inner.inner(),
                 cpaths.as_ptr(),
                 paths_v.len(),
-                opts.inner as *const _
+                opts.inner.cast_const()
             ));
             Ok(())
         }
@@ -2001,9 +2033,50 @@ impl<T: ThreadMode, D: DBInner> DBCommon<T, D> {
                 cf.inner(),
                 cpaths.as_ptr(),
                 paths_v.len(),
-                opts.inner as *const _
+                opts.inner.cast_const()
             ));
             Ok(())
+        }
+    }
+
+    /// Obtains the LSM-tree meta data of the default column family of the DB
+    pub fn get_column_family_metadata(&self) -> ColumnFamilyMetaData {
+        unsafe {
+            let ptr = ffi::rocksdb_get_column_family_metadata(self.inner.inner());
+
+            let metadata = ColumnFamilyMetaData {
+                size: ffi::rocksdb_column_family_metadata_get_size(ptr),
+                name: from_cstr(ffi::rocksdb_column_family_metadata_get_name(ptr)),
+                file_count: ffi::rocksdb_column_family_metadata_get_file_count(ptr),
+            };
+
+            // destroy
+            ffi::rocksdb_column_family_metadata_destroy(ptr);
+
+            // return
+            metadata
+        }
+    }
+
+    /// Obtains the LSM-tree meta data of the specified column family of the DB
+    pub fn get_column_family_metadata_cf(
+        &self,
+        cf: &impl AsColumnFamilyRef,
+    ) -> ColumnFamilyMetaData {
+        unsafe {
+            let ptr = ffi::rocksdb_get_column_family_metadata_cf(self.inner.inner(), cf.inner());
+
+            let metadata = ColumnFamilyMetaData {
+                size: ffi::rocksdb_column_family_metadata_get_size(ptr),
+                name: from_cstr(ffi::rocksdb_column_family_metadata_get_name(ptr)),
+                file_count: ffi::rocksdb_column_family_metadata_get_file_count(ptr),
+            };
+
+            // destroy
+            ffi::rocksdb_column_family_metadata_destroy(ptr);
+
+            // return
+            metadata
         }
     }
 
@@ -2197,6 +2270,18 @@ impl<T: ThreadMode, I: DBInner> fmt::Debug for DBCommon<T, I> {
     }
 }
 
+/// The metadata that describes a column family.
+#[derive(Debug, Clone)]
+pub struct ColumnFamilyMetaData {
+    // The size of this column family in bytes, which is equal to the sum of
+    // the file size of its "levels".
+    pub size: u64,
+    // The name of the column family.
+    pub name: String,
+    // The number of files in this column family.
+    pub file_count: usize,
+}
+
 /// The metadata that describes a SST file
 #[derive(Debug, Clone)]
 pub struct LiveFile {
@@ -2241,8 +2326,8 @@ pub(crate) fn convert_values(
 ) -> Vec<Result<Option<Vec<u8>>, Error>> {
     values
         .into_iter()
-        .zip(values_sizes.into_iter())
-        .zip(errors.into_iter())
+        .zip(values_sizes)
+        .zip(errors)
         .map(|((v, s), e)| {
             if e.is_null() {
                 let value = unsafe { crate::ffi_util::raw_data(v, s) };
