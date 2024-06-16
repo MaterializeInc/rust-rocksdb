@@ -96,7 +96,6 @@ mod snapshot;
 mod sst_file_writer;
 mod transactions;
 mod write_batch;
-mod write_buffer_manager;
 
 pub use crate::{
     column_family::{
@@ -133,7 +132,6 @@ pub use crate::{
         TransactionDBOptions, TransactionOptions,
     },
     write_batch::{WriteBatch, WriteBatchIterator, WriteBatchWithTransaction},
-    write_buffer_manager::WriteBufferManager,
 };
 
 use librocksdb_sys as ffi;
@@ -229,7 +227,7 @@ impl fmt::Display for Error {
 mod test {
     use crate::{
         OptimisticTransactionDB, OptimisticTransactionOptions, Transaction, TransactionDB,
-        TransactionDBOptions, TransactionOptions, WriteBufferManager,
+        TransactionDBOptions, TransactionOptions,
     };
 
     use super::{
@@ -276,7 +274,6 @@ mod test {
         is_send::<TransactionDBOptions>();
         is_send::<OptimisticTransactionOptions>();
         is_send::<TransactionOptions>();
-        is_send::<WriteBufferManager>();
     }
 
     #[test]
@@ -307,6 +304,5 @@ mod test {
         is_sync::<TransactionDBOptions>();
         is_sync::<OptimisticTransactionOptions>();
         is_sync::<TransactionOptions>();
-        is_sync::<WriteBufferManager>();
     }
 }
